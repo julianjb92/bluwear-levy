@@ -1,74 +1,174 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-  calculateReduction,
-  formatKRW,
-  formatBillion,
-  getEmploymentLevelLabel,
-  LEVY_BASE_2025,
-  MANDATORY_RATE,
-  CompanyInput,
-  BluwearInput,
-  CalculationResult,
-} from '@/lib/calculator';
-import {
-  Building2,
-  Users,
   Calculator,
   TrendingDown,
-  CheckCircle,
-  AlertCircle,
-  ArrowRight,
   Sparkles,
-  FileText,
-  HelpCircle,
+  ArrowRight,
+  Building2,
+  FileSpreadsheet,
+  PiggyBank,
+  ChevronDown,
+  ChevronUp,
+  Info,
 } from 'lucide-react';
 
+// 2025년 부담기초액
+const LEVY_BASE_2025 = 1258000;
+
+// 월별 데이터 타입
+interface MonthlyData {
+  month: number;
+  disabledWorkers: number;    // 장애인근로자수
+  severeDisabled: number;     // 중증장애인수
+}
+
+// 계산 결과 타입
+interface CalculationResult {
+  doubleCount: number;        // 2배수적용
+  supplyRatio: number;        // 수급액비율
+  monthlyReduction: number;   // 월별감면액
+}
+
+// 수급액비율 계산 (소수점 4자리)
+function calculateSupplyRatio(contractAmount: number, totalRevenue: number): number {
+  if (totalRevenue === 0) return 0;
+  return Math.floor((contractAmount / totalRevenue) * 10000) / 10000;
+}
+
+// 2배수 적용 계산
+function calculateDoubleCount(disabledWorkers: number, severeDisabled: number): number {
+  return severeDisabled * 2 + (disabledWorkers - severeDisabled);
+}
+
+// 월별 감면액 계산 (10원 미만 버림)
+function calculateMonthlyReduction(
+  doubleCount: number,
+  supplyRatio: number,
+  levyBase: number = LEVY_BASE_2025
+): number {
+  return Math.floor((doubleCount * supplyRatio * levyBase) / 10) * 10;
+}
+
+// 최종 감면액 계산
+function calculateFinalReduction(
+  totalReduction: number,
+  contractAmount: number,
+  annualLevy: number,
+  limit90: number = 0.9,
+  limit50: number = 0.5
+): number {
+  const limitByContract = contractAmount * limit50;
+  const limitByLevy = annualLevy * limit90;
+  
+  // MIN(합계, 도급액×50%, 부담금×90%)
+  let result = totalReduction;
+  if (result > limitByContract) result = limitByContract;
+  if (result > limitByLevy) result = limitByLevy;
+  
+  return result;
+}
+
+// 금액 포맷
+function formatKRW(amount: number): string {
+  return new Intl.NumberFormat('ko-KR').format(Math.round(amount));
+}
+
+// 억 단위 포맷
+function formatBillion(amount: number): string {
+  const billion = amount / 100000000;
+  if (billion >= 1) {
+    return `${billion.toFixed(1)}억원`;
+  }
+  const man = amount / 10000;
+  if (man >= 1) {
+    return `${new Intl.NumberFormat('ko-KR').format(Math.round(man))}만원`;
+  }
+  return formatKRW(amount) + '원';
+}
+
 export default function Home() {
-  const [companyType, setCompanyType] = useState<'private' | 'public' | 'government'>('private');
-  const [company, setCompany] = useState<CompanyInput>({
-    type: 'private',
-    totalEmployees: 500,
-    disabledEmployees: 10,
-    severeDisabled: 3,
-  });
-  const [bluwear, setBluwear] = useState<BluwearInput>({
-    totalRevenue: 300000000,
-    contractAmount: 30000000,
-    disabledWorkers: 10,
-    severeDisabledWorkers: 5,
-  });
-  const [result, setResult] = useState<CalculationResult | null>(null);
-  const [showTooltip, setShowTooltip] = useState<string | null>(null);
-
-  useEffect(() => {
-    const newCompany = { ...company, type: companyType };
-    setCompany(newCompany);
-    const calc = calculateReduction(newCompany, bluwear);
-    setResult(calc);
-  }, [companyType, company.totalEmployees, company.disabledEmployees, company.severeDisabled, 
-      bluwear.totalRevenue, bluwear.contractAmount, bluwear.disabledWorkers, bluwear.severeDisabledWorkers]);
-
-  const handleCompanyChange = (field: keyof CompanyInput, value: number) => {
-    setCompany(prev => ({ ...prev, [field]: value }));
+  // 연계고용 대상 사업체 정보 (BLUWEAR)
+  const [totalRevenue, setTotalRevenue] = useState(300000000);     // 총매출액 (A)
+  const [contractAmount, setContractAmount] = useState(30000000);  // 수급액 (B)
+  
+  // 발생 부담금액
+  const [annualLevy, setAnnualLevy] = useState(30000000);
+  
+  // 감면 한도
+  const [limit90, setLimit90] = useState(0.9);
+  const [limit50, setLimit50] = useState(0.5);
+  
+  // 월별 데이터 (1-12월)
+  const [monthlyData, setMonthlyData] = useState<MonthlyData[]>(
+    Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      disabledWorkers: 10,
+      severeDisabled: 5,
+    }))
+  );
+  
+  const [showMonthlyDetail, setShowMonthlyDetail] = useState(false);
+  const [applyAllMonths, setApplyAllMonths] = useState(true);
+  
+  // 계산된 수급액 비율
+  const supplyRatio = useMemo(() => {
+    return calculateSupplyRatio(contractAmount, totalRevenue);
+  }, [contractAmount, totalRevenue]);
+  
+  // 월별 계산 결과
+  const monthlyResults = useMemo(() => {
+    return monthlyData.map(data => {
+      const doubleCount = calculateDoubleCount(data.disabledWorkers, data.severeDisabled);
+      const monthlyReduction = calculateMonthlyReduction(doubleCount, supplyRatio);
+      return {
+        ...data,
+        doubleCount,
+        monthlyReduction,
+      };
+    });
+  }, [monthlyData, supplyRatio]);
+  
+  // 감면 총액
+  const totalReduction = useMemo(() => {
+    return monthlyResults.reduce((sum, r) => sum + r.monthlyReduction, 0);
+  }, [monthlyResults]);
+  
+  // 최종 감면액
+  const finalReduction = useMemo(() => {
+    return calculateFinalReduction(totalReduction, contractAmount, annualLevy, limit90, limit50);
+  }, [totalReduction, contractAmount, annualLevy, limit90, limit50]);
+  
+  // 한도 정보
+  const limitByContract = contractAmount * limit50;
+  const limitByLevy = annualLevy * limit90;
+  
+  // 일괄 적용 시 첫 번째 월 데이터로 모든 월 업데이트
+  const handleBulkUpdate = (field: 'disabledWorkers' | 'severeDisabled', value: number) => {
+    if (applyAllMonths) {
+      setMonthlyData(prev => prev.map(d => ({ ...d, [field]: value })));
+    } else {
+      setMonthlyData(prev => {
+        const updated = [...prev];
+        updated[0] = { ...updated[0], [field]: value };
+        return updated;
+      });
+    }
   };
-
-  const handleBluwearChange = (field: keyof BluwearInput, value: number) => {
-    setBluwear(prev => ({ ...prev, [field]: value }));
+  
+  // 개별 월 업데이트
+  const handleMonthUpdate = (month: number, field: 'disabledWorkers' | 'severeDisabled', value: number) => {
+    setMonthlyData(prev => prev.map(d => 
+      d.month === month ? { ...d, [field]: value } : d
+    ));
   };
-
-  const companyTypes = [
-    { id: 'private', label: '민간기업', desc: '의무고용률 3.1%' },
-    { id: 'public', label: '공공기관', desc: '의무고용률 3.8%' },
-    { id: 'government', label: '국가/지자체', desc: '의무고용률 3.8%' },
-  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-sm border-b border-gray-100 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-200">
@@ -79,325 +179,264 @@ export default function Home() {
                 <p className="text-xs text-gray-500">장애인고용부담금 감면 시뮬레이션</p>
               </div>
             </div>
-            <div className="text-right text-sm text-gray-500">
-              <p>2025년 부담기초액</p>
-              <p className="font-semibold text-blue-600">{formatKRW(LEVY_BASE_2025)}</p>
-            </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Company Type Selection */}
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-blue-600" />
-            사업장 유형 선택
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {companyTypes.map((type) => (
-              <button
-                key={type.id}
-                onClick={() => setCompanyType(type.id as 'private' | 'public' | 'government')}
-                className={`p-4 rounded-xl border-2 transition-all ${
-                  companyType === type.id
-                    ? 'border-blue-500 bg-blue-50 shadow-lg shadow-blue-100'
-                    : 'border-gray-200 bg-white hover:border-blue-300'
-                }`}
-              >
-                <div className="text-left">
-                  <p className={`font-semibold ${companyType === type.id ? 'text-blue-600' : 'text-gray-900'}`}>
-                    {type.label}
-                  </p>
-                  <p className="text-sm text-gray-500">{type.desc}</p>
-                </div>
-              </button>
-            ))}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* 결과 요약 카드 */}
+        <div className="mb-8 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-6 text-white shadow-xl">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div>
+              <p className="text-emerald-100 text-sm mb-1">감면 계산액</p>
+              <p className="text-2xl font-bold">{formatKRW(totalReduction)}원</p>
+            </div>
+            <div>
+              <p className="text-emerald-100 text-sm mb-1">도급액 50% 한도</p>
+              <p className="text-lg font-semibold">{formatKRW(limitByContract)}원</p>
+            </div>
+            <div>
+              <p className="text-emerald-100 text-sm mb-1">부담금 90% 한도</p>
+              <p className="text-lg font-semibold">{formatKRW(limitByLevy)}원</p>
+            </div>
+            <div className="bg-white/20 rounded-xl p-4">
+              <p className="text-emerald-100 text-sm mb-1">🎉 최종 감면액</p>
+              <p className="text-3xl font-bold text-yellow-300">{formatKRW(finalReduction)}원</p>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Input Section */}
-          <div className="space-y-6">
-            {/* Company Info */}
-            <div className="bg-white rounded-2xl shadow-xl shadow-gray-100 border border-gray-100 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-600" />
-                귀사 현황
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* 좌측: 입력 섹션 */}
+          <div className="lg:col-span-1 space-y-6">
+            {/* 연계고용 대상 사업체 정보 */}
+            <div className="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-xl p-6 text-white">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Building2 className="w-5 h-5" />
+                연계고용 대상 사업체
               </h3>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    상시근로자 수
-                  </label>
+                  <label className="block text-sm text-blue-100 mb-1">총 매출액 (A)</label>
                   <input
                     type="number"
-                    value={company.totalEmployees}
-                    onChange={(e) => handleCompanyChange('totalEmployees', parseInt(e.target.value) || 0)}
-                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 text-lg"
+                    value={totalRevenue}
+                    onChange={(e) => setTotalRevenue(parseInt(e.target.value) || 0)}
+                    className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white text-lg"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    의무고용인원: {Math.floor(company.totalEmployees * (companyType === 'private' ? MANDATORY_RATE.private : MANDATORY_RATE.public))}명
-                  </p>
+                  <p className="text-xs text-blue-200 mt-1">{formatBillion(totalRevenue)}</p>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      현재 장애인 고용
-                    </label>
-                    <input
-                      type="number"
-                      value={company.disabledEmployees}
-                      onChange={(e) => handleCompanyChange('disabledEmployees', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      중증장애인 수
-                    </label>
-                    <input
-                      type="number"
-                      value={company.severeDisabled}
-                      onChange={(e) => handleCompanyChange('severeDisabled', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">중증은 2배수 인정</p>
-                  </div>
+                <div>
+                  <label className="block text-sm text-blue-100 mb-1">수급액 (B) - 도급금액</label>
+                  <input
+                    type="number"
+                    value={contractAmount}
+                    onChange={(e) => setContractAmount(parseInt(e.target.value) || 0)}
+                    className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white text-lg"
+                  />
+                  <p className="text-xs text-blue-200 mt-1">{formatBillion(contractAmount)}</p>
+                </div>
+                <div className="p-3 bg-white/10 rounded-xl">
+                  <p className="text-sm">
+                    수급액 비율 (B/A): <span className="font-bold text-xl">{(supplyRatio * 100).toFixed(2)}%</span>
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* BLUWEAR Info */}
-            <div className="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-xl p-6 text-white">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Sparkles className="w-5 h-5" />
-                BLUWEAR 연계고용 정보
+            {/* 발생 부담금 & 한도 */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <PiggyBank className="w-5 h-5 text-red-500" />
+                발생 부담금액 (2025)
               </h3>
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-blue-100 mb-1">
-                      BLUWEAR 연간 총매출
-                    </label>
+              <input
+                type="number"
+                value={annualLevy}
+                onChange={(e) => setAnnualLevy(parseInt(e.target.value) || 0)}
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 text-gray-900 text-lg mb-4"
+              />
+              <p className="text-sm text-gray-500 mb-4">{formatBillion(annualLevy)}</p>
+              
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="text-sm text-gray-600">부담기초액 (2025)</span>
+                  <span className="font-semibold text-gray-900">{formatKRW(LEVY_BASE_2025)}원</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 감면 한도 설정 */}
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-6">
+              <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Info className="w-5 h-5 text-amber-500" />
+                감면 한도
+              </h3>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">발생부담금액의</span>
+                  <div className="flex items-center gap-2">
                     <input
                       type="number"
-                      value={bluwear.totalRevenue}
-                      onChange={(e) => handleBluwearChange('totalRevenue', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white placeholder-white/50"
+                      value={limit90 * 100}
+                      onChange={(e) => setLimit90((parseFloat(e.target.value) || 0) / 100)}
+                      className="w-16 px-2 py-1 border border-gray-200 rounded text-center text-gray-900"
+                      step="1"
                     />
-                    <p className="text-xs text-blue-200 mt-1">{formatBillion(bluwear.totalRevenue)}</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-blue-100 mb-1">
-                      귀사 도급 계약금
-                    </label>
-                    <input
-                      type="number"
-                      value={bluwear.contractAmount}
-                      onChange={(e) => handleBluwearChange('contractAmount', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white placeholder-white/50"
-                    />
-                    <p className="text-xs text-blue-200 mt-1">{formatBillion(bluwear.contractAmount)}</p>
+                    <span className="text-gray-600">% 이내</span>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-blue-100 mb-1">
-                      BLUWEAR 장애인 근로자
-                    </label>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-600">도급금액의</span>
+                  <div className="flex items-center gap-2">
                     <input
                       type="number"
-                      value={bluwear.disabledWorkers}
-                      onChange={(e) => handleBluwearChange('disabledWorkers', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white"
+                      value={limit50 * 100}
+                      onChange={(e) => setLimit50((parseFloat(e.target.value) || 0) / 100)}
+                      className="w-16 px-2 py-1 border border-gray-200 rounded text-center text-gray-900"
+                      step="1"
                     />
+                    <span className="text-gray-600">% 이내</span>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-blue-100 mb-1">
-                      중증장애인 수
-                    </label>
-                    <input
-                      type="number"
-                      value={bluwear.severeDisabledWorkers}
-                      onChange={(e) => handleBluwearChange('severeDisabledWorkers', parseInt(e.target.value) || 0)}
-                      className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl focus:ring-2 focus:ring-white/50 text-white"
-                    />
-                  </div>
-                </div>
-                <div className="mt-4 p-3 bg-white/10 rounded-xl">
-                  <p className="text-sm text-blue-100">
-                    수급액 비율: <span className="font-bold text-white">{result ? (result.supplyRatio * 100).toFixed(2) : 0}%</span>
-                    <span className="text-blue-200 ml-2">(도급금 ÷ 총매출)</span>
-                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Result Section */}
-          <div className="space-y-6">
-            {result && (
-              <>
-                {/* Summary Card */}
-                <div className="bg-white rounded-2xl shadow-xl shadow-gray-100 border border-gray-100 overflow-hidden">
-                  <div className="bg-gradient-to-r from-emerald-500 to-teal-500 p-6 text-white">
-                    <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
-                      <TrendingDown className="w-5 h-5" />
-                      감면 효과 요약
-                    </h3>
-                    <div className="grid grid-cols-2 gap-4 mt-4">
-                      <div>
-                        <p className="text-emerald-100 text-sm">현재 부담금</p>
-                        <p className="text-2xl font-bold">{formatBillion(result.annualLevy)}</p>
-                      </div>
-                      <div>
-                        <p className="text-emerald-100 text-sm">최종 감면액</p>
-                        <p className="text-2xl font-bold text-yellow-300">-{formatBillion(result.finalReduction)}</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-gray-600">감면 후 부담금</span>
-                      <span className="text-2xl font-bold text-gray-900">{formatBillion(result.netLevy)}</span>
-                    </div>
-                    <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all"
-                        style={{ width: `${Math.min(result.savingsPercent, 100)}%` }}
-                      />
-                    </div>
-                    <p className="text-center text-lg font-bold text-emerald-600 mt-2">
-                      {result.savingsPercent.toFixed(1)}% 절감!
-                    </p>
-                  </div>
-                </div>
-
-                {/* Detail Card */}
-                <div className="bg-white rounded-2xl shadow-xl shadow-gray-100 border border-gray-100 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
-                    <FileText className="w-5 h-5 text-blue-600" />
-                    상세 계산 내역
+          {/* 우측: 월별 계산 테이블 */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="p-6 border-b border-gray-100">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                    <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+                    월별 감면액 계산
                   </h3>
-                  
-                  <div className="space-y-4">
-                    {/* 현황 */}
-                    <div className="p-4 bg-gray-50 rounded-xl">
-                      <h4 className="font-medium text-gray-700 mb-2">📊 귀사 현황</h4>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <span className="text-gray-500">의무고용인원</span>
-                        <span className="text-right font-medium">{result.mandatoryEmployees}명</span>
-                        <span className="text-gray-500">미달인원</span>
-                        <span className="text-right font-medium text-red-600">{result.shortfall}명</span>
-                        <span className="text-gray-500">고용수준</span>
-                        <span className="text-right font-medium">{getEmploymentLevelLabel(result.employmentLevel)}</span>
-                        <span className="text-gray-500">적용 부담기초액</span>
-                        <span className="text-right font-medium">{formatKRW(result.levyBase)}</span>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={applyAllMonths}
+                      onChange={(e) => setApplyAllMonths(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    <span className="text-gray-600">전체 월 일괄적용</span>
+                  </label>
+                </div>
+                
+                {/* 일괄 입력 */}
+                {applyAllMonths && (
+                  <div className="mt-4 p-4 bg-blue-50 rounded-xl">
+                    <p className="text-sm text-blue-700 mb-3">전체 월에 동일하게 적용할 값을 입력하세요</p>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">장애인근로자수</label>
+                        <input
+                          type="number"
+                          value={monthlyData[0].disabledWorkers}
+                          onChange={(e) => handleBulkUpdate('disabledWorkers', parseInt(e.target.value) || 0)}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-gray-900"
+                        />
                       </div>
-                    </div>
-
-                    {/* 부담금 */}
-                    <div className="p-4 bg-red-50 rounded-xl">
-                      <h4 className="font-medium text-red-700 mb-2">💸 현재 연간 부담금</h4>
-                      <p className="text-sm text-gray-600 mb-1">
-                        {result.shortfall}명 × {formatKRW(result.levyBase)} × 12개월
-                      </p>
-                      <p className="text-xl font-bold text-red-600">{formatKRW(result.annualLevy)}</p>
-                    </div>
-
-                    {/* 감면 계산 */}
-                    <div className="p-4 bg-blue-50 rounded-xl">
-                      <h4 className="font-medium text-blue-700 mb-2">🧮 감면액 계산</h4>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <span className="text-gray-500">BLUWEAR 장애인(2배수)</span>
-                        <span className="text-right font-medium">{result.doubleCountWorkers}명</span>
-                        <span className="text-gray-500">수급액비율</span>
-                        <span className="text-right font-medium">{(result.supplyRatio * 100).toFixed(2)}%</span>
-                        <span className="text-gray-500">월별 감면액</span>
-                        <span className="text-right font-medium">{formatKRW(result.monthlyReduction)}</span>
-                        <span className="text-gray-500">연간 감면계산액</span>
-                        <span className="text-right font-medium">{formatKRW(result.annualReduction)}</span>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">중증장애인수</label>
+                        <input
+                          type="number"
+                          value={monthlyData[0].severeDisabled}
+                          onChange={(e) => handleBulkUpdate('severeDisabled', parseInt(e.target.value) || 0)}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-gray-900"
+                        />
                       </div>
-                    </div>
-
-                    {/* 한도 */}
-                    <div className="p-4 bg-amber-50 rounded-xl">
-                      <h4 className="font-medium text-amber-700 mb-2">⚠️ 감면 한도</h4>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between items-center">
-                          <span className="text-gray-600">부담금의 90%</span>
-                          <span className={`font-medium ${result.finalReduction === result.limit90Percent ? 'text-amber-600' : 'text-gray-500'}`}>
-                            {formatKRW(result.limit90Percent)}
-                            {result.finalReduction === result.limit90Percent && ' ← 적용'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-gray-600">도급액의 50%</span>
-                          <span className={`font-medium ${result.finalReduction === result.limit50Percent ? 'text-amber-600' : 'text-gray-500'}`}>
-                            {formatKRW(result.limit50Percent)}
-                            {result.finalReduction === result.limit50Percent && ' ← 적용'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 최종 */}
-                    <div className="p-4 bg-emerald-50 rounded-xl border-2 border-emerald-200">
-                      <h4 className="font-medium text-emerald-700 mb-2">✅ 최종 감면액</h4>
-                      <p className="text-2xl font-bold text-emerald-600">{formatKRW(result.finalReduction)}</p>
                     </div>
                   </div>
-                </div>
+                )}
+              </div>
+              
+              {/* 테이블 */}
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">월</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">장애인근로자수</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">중증장애인수</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">2배수적용</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">수급액비율</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">감면액</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {monthlyResults.map((result) => (
+                      <tr key={result.month} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm font-medium text-gray-900">{result.month}월</td>
+                        <td className="px-4 py-3 text-right">
+                          {!applyAllMonths ? (
+                            <input
+                              type="number"
+                              value={result.disabledWorkers}
+                              onChange={(e) => handleMonthUpdate(result.month, 'disabledWorkers', parseInt(e.target.value) || 0)}
+                              className="w-16 px-2 py-1 border border-gray-200 rounded text-right text-sm text-gray-900"
+                            />
+                          ) : (
+                            <span className="text-sm text-gray-900">{result.disabledWorkers}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {!applyAllMonths ? (
+                            <input
+                              type="number"
+                              value={result.severeDisabled}
+                              onChange={(e) => handleMonthUpdate(result.month, 'severeDisabled', parseInt(e.target.value) || 0)}
+                              className="w-16 px-2 py-1 border border-gray-200 rounded text-right text-sm text-gray-900"
+                            />
+                          ) : (
+                            <span className="text-sm text-gray-900">{result.severeDisabled}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right text-sm font-medium text-blue-600">{result.doubleCount}</td>
+                        <td className="px-4 py-3 text-right text-sm text-gray-600">{(supplyRatio * 100).toFixed(2)}%</td>
+                        <td className="px-4 py-3 text-right text-sm font-medium text-emerald-600">{formatKRW(result.monthlyReduction)}원</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                    <tr>
+                      <td colSpan={5} className="px-4 py-3 text-right font-semibold text-gray-700">감면총액</td>
+                      <td className="px-4 py-3 text-right font-bold text-lg text-gray-900">{formatKRW(totalReduction)}원</td>
+                    </tr>
+                    <tr className="bg-emerald-50">
+                      <td colSpan={5} className="px-4 py-3 text-right font-semibold text-emerald-700">감면액 (한도적용)</td>
+                      <td className="px-4 py-3 text-right font-bold text-xl text-emerald-600">{formatKRW(finalReduction)}원</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
 
-                {/* CTA */}
-                <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 text-white">
-                  <h3 className="font-semibold text-lg mb-2">BLUWEAR와 함께하세요!</h3>
-                  <p className="text-blue-100 text-sm mb-4">
-                    장애인고용부담금 감면과 ESG 경영 실현을 동시에!
-                  </p>
-                  <button className="w-full py-3 bg-white text-blue-600 rounded-xl font-semibold hover:bg-blue-50 transition-colors flex items-center justify-center gap-2">
-                    상담 신청하기
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </>
-            )}
+            {/* 계산식 설명 */}
+            <div className="mt-6 p-4 bg-gray-50 rounded-xl border border-gray-200">
+              <p className="text-sm text-gray-600 mb-2">
+                <strong>※ 각 월 감면액 계산식:</strong>
+              </p>
+              <p className="text-sm text-gray-700 font-mono bg-white p-2 rounded">
+                감면액 = ROUNDDOWN(부담기초액 × 수급액비율 × 장애인근로자수(2배수적용), -1)
+              </p>
+              <p className="text-sm text-gray-600 mt-3">
+                <strong>※ 감면한도:</strong> 발생부담금액의 {(limit90 * 100).toFixed(0)}% 이내, 도급금액의 {(limit50 * 100).toFixed(0)}% 이내
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* Info Section */}
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-xl p-6 shadow-lg shadow-gray-100 border border-gray-100">
-            <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mb-4">
-              <CheckCircle className="w-6 h-6 text-blue-600" />
-            </div>
-            <h3 className="font-semibold text-gray-900 mb-2">연계고용 제도란?</h3>
-            <p className="text-sm text-gray-600">
-              장애인표준사업장과 거래 시, 해당 사업장의 장애인 근로자를
-              귀사가 고용한 것으로 간주하여 부담금을 감면받는 제도입니다.
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-6 shadow-lg shadow-gray-100 border border-gray-100">
-            <div className="w-12 h-12 bg-emerald-100 rounded-xl flex items-center justify-center mb-4">
-              <TrendingDown className="w-6 h-6 text-emerald-600" />
-            </div>
-            <h3 className="font-semibold text-gray-900 mb-2">감면 한도</h3>
-            <p className="text-sm text-gray-600">
-              연간 부담금의 90% 이내, 도급금액의 50% 이내로 감면됩니다.
-              두 한도 중 낮은 금액이 최종 감면액으로 적용됩니다.
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-6 shadow-lg shadow-gray-100 border border-gray-100">
-            <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mb-4">
-              <Sparkles className="w-6 h-6 text-purple-600" />
-            </div>
-            <h3 className="font-semibold text-gray-900 mb-2">중증장애인 2배수</h3>
-            <p className="text-sm text-gray-600">
-              중증장애인은 2명으로 산정됩니다. BLUWEAR는 중증장애인 고용에
-              특화되어 더 높은 감면 효과를 제공합니다.
-            </p>
-          </div>
+        {/* CTA */}
+        <div className="mt-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl p-6 text-white text-center">
+          <h3 className="font-semibold text-lg mb-2">BLUWEAR와 함께하세요!</h3>
+          <p className="text-blue-100 text-sm mb-4">
+            장애인고용부담금 감면과 ESG 경영 실현을 동시에!
+          </p>
+          <button className="px-8 py-3 bg-white text-blue-600 rounded-xl font-semibold hover:bg-blue-50 transition-colors inline-flex items-center gap-2">
+            상담 신청하기
+            <ArrowRight className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Footer */}
