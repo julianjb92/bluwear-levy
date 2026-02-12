@@ -11,6 +11,10 @@ import {
   Info,
   Users,
   AlertTriangle,
+  Wallet,
+  ArrowDown,
+  CheckCircle,
+  Sparkles,
 } from 'lucide-react';
 
 // 부담기초액 구간별 (2025년 적용·2026년 신고)
@@ -111,6 +115,9 @@ export default function Home() {
   const [currentDisabled, setCurrentDisabled] = useState(10);
   const [currentSevere, setCurrentSevere] = useState(3);
   
+  // 기존 외주 비용 (유니폼/굿즈/디자인 등)
+  const [existingOutsourceCost, setExistingOutsourceCost] = useState(100000000);
+  
   // 연계고용 대상 사업체 정보 (BLUWEAR)
   const [totalRevenue, setTotalRevenue] = useState(300000000);
   const [contractAmount, setContractAmount] = useState(30000000);
@@ -189,6 +196,13 @@ export default function Home() {
   // 한도 정보
   const limitByContract = contractAmount * limit50;
   const limitByLevy = annualLevy * limit90;
+  
+  // 회사 전체 비용 비교
+  const totalCostBefore = annualLevy + existingOutsourceCost;
+  const afterLevy = annualLevy - finalReduction;
+  const totalCostAfter = afterLevy + contractAmount;
+  const netSavings = totalCostBefore - totalCostAfter;
+  const savingsPercent = totalCostBefore > 0 ? (netSavings / totalCostBefore) * 100 : 0;
   
   // 일괄 적용
   const handleBulkUpdate = (field: 'disabledWorkers' | 'severeDisabled', value: number) => {
@@ -441,7 +455,7 @@ export default function Home() {
           </div>
 
           {/* 우측: 월별 계산 테이블 */}
-          <div className="lg:col-span-8">
+          <div className="lg:col-span-8 space-y-6">
             <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
               <div className="p-6 border-b border-gray-100">
                 <div className="flex items-center justify-between">
@@ -547,8 +561,117 @@ export default function Home() {
               </div>
             </div>
 
+            {/* 회사 전체 비용 비교 - 새로운 섹션 */}
+            <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl shadow-xl p-6 text-white">
+              <h3 className="font-semibold mb-4 flex items-center gap-2">
+                <Wallet className="w-5 h-5" />
+                회사 전체 비용 비교
+              </h3>
+              
+              {/* 기존 외주 비용 입력 */}
+              <div className="mb-6">
+                <label className="block text-sm text-purple-100 mb-2">
+                  기존 유니폼/굿즈/디자인 외주 비용 (연간)
+                </label>
+                <input
+                  type="number"
+                  value={existingOutsourceCost}
+                  onChange={(e) => setExistingOutsourceCost(parseInt(e.target.value) || 0)}
+                  className="w-full px-4 py-3 bg-white/20 border border-white/30 rounded-xl text-white text-lg"
+                  placeholder="기존에 사용하던 외주 비용"
+                />
+                <p className="text-xs text-purple-200 mt-1">{formatBillion(existingOutsourceCost)}</p>
+              </div>
+
+              {/* Before / After 비교 */}
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                {/* Before */}
+                <div className="bg-white/10 rounded-xl p-4">
+                  <p className="text-purple-200 text-sm font-medium mb-3">📍 Before (현재)</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-purple-200">부담금</span>
+                      <span className="font-medium">{formatBillion(annualLevy)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-purple-200">기존 외주비용</span>
+                      <span className="font-medium">{formatBillion(existingOutsourceCost)}</span>
+                    </div>
+                    <div className="border-t border-white/20 pt-2 mt-2">
+                      <div className="flex justify-between">
+                        <span className="text-purple-200 font-medium">총 지출</span>
+                        <span className="font-bold text-lg">{formatBillion(totalCostBefore)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* After */}
+                <div className="bg-emerald-500/30 rounded-xl p-4 border-2 border-emerald-400/50">
+                  <p className="text-emerald-200 text-sm font-medium mb-3">✨ After (BLUWEAR)</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-200">부담금 (감면후)</span>
+                      <span className="font-medium">{formatBillion(afterLevy)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-emerald-200">BLUWEAR 도급</span>
+                      <span className="font-medium">{formatBillion(contractAmount)}</span>
+                    </div>
+                    <div className="border-t border-white/20 pt-2 mt-2">
+                      <div className="flex justify-between">
+                        <span className="text-emerald-200 font-medium">총 지출</span>
+                        <span className="font-bold text-lg">{formatBillion(totalCostAfter)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 최종 절감액 */}
+              <div className={`rounded-xl p-5 ${netSavings >= 0 ? 'bg-gradient-to-r from-yellow-400 to-amber-500' : 'bg-red-500/50'}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className={`text-sm font-medium ${netSavings >= 0 ? 'text-yellow-900' : 'text-red-100'}`}>
+                      {netSavings >= 0 ? '🎉 연간 순절감액' : '⚠️ 추가 비용'}
+                    </p>
+                    <p className="text-xs mt-1 opacity-80">
+                      {netSavings >= 0 
+                        ? '기존 비용 대비 BLUWEAR 전환 시' 
+                        : '도급금액이 기존 외주비용보다 높습니다'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-3xl font-bold ${netSavings >= 0 ? 'text-yellow-900' : 'text-white'}`}>
+                      {netSavings >= 0 ? '' : '-'}{formatBillion(Math.abs(netSavings))}
+                    </p>
+                    {netSavings > 0 && (
+                      <p className="text-sm text-yellow-800 font-medium">
+                        {savingsPercent.toFixed(1)}% 절감!
+                      </p>
+                    )}
+                  </div>
+                </div>
+                
+                {netSavings > 0 && (
+                  <div className="mt-4 pt-4 border-t border-yellow-600/30">
+                    <div className="flex items-center gap-2 text-yellow-900 text-sm">
+                      <CheckCircle className="w-4 h-4" />
+                      <span>동일한 제품 + 부담금 절감 = 실질 비용 절감!</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 도움말 */}
+              <p className="text-xs text-purple-200 mt-4">
+                💡 기존에 사용하던 유니폼/굿즈 비용을 BLUWEAR로 전환하면, 
+                동일한 제품을 받으면서 부담금까지 감면받아 실질적인 비용 절감이 가능합니다.
+              </p>
+            </div>
+
             {/* 계산식 설명 */}
-            <div className="mt-6 p-4 bg-gray-50 rounded-xl border border-gray-200">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200">
               <p className="text-sm text-gray-600 mb-2">
                 <strong>※ 각 월 감면액 계산식:</strong>
               </p>
